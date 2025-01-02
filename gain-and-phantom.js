@@ -13,14 +13,67 @@ const state = {
         lowZ: false,
         input: "mic", // Default to mic
         connection: "front", // Default to front
-        gain: 0, // Default gain
+        micGain: 0, // Default mic gain
+        lineGain: 0, // Default line gain
+        diGain: 0, // Default DI gain
     })),
 };
 
 // Create a single socket connection
 const client = new net.Socket();
 
-// Function to construct a payload
+function parseIncomingData(data) {
+    const hexData = data.toString('hex');
+    console.log('Received:', hexData);
+
+    // Extract channel ID (10th byte in the payload)
+    const channelId = parseInt(hexData.substring(18, 20), 16);
+
+    // Extract front/back (11th to 14th bytes)
+    const connectionHex = hexData.substring(20, 28);
+    const connectionFlag = parseInt(connectionHex, 16);
+
+    // Extract settings bitfield (15th to 18th bytes)
+    const settingsHex = hexData.substring(28, 36);
+    const settings = parseInt(settingsHex, 16);
+
+    // Extract gain encoding (last 6 characters)
+    const gainEncoding = hexData.substring(hexData.length - 6);
+    const micGain = parseInt(gainEncoding.substring(0, 2), 16);
+    const lineGain = parseInt(gainEncoding.substring(2, 4), 16);
+    const diGain = parseInt(gainEncoding.substring(4, 6), 16);
+
+    // Update channel state
+    if (state.channels[channelId] !== undefined) {
+        // Decode connection (front/back)
+        state.channels[channelId].connection = (connectionFlag === 0x00000001) ? "front" : "back";
+
+        // Decode specific settings from the bitfield
+        state.channels[channelId].phantom = !!(settings & 0x00000001);
+        state.channels[channelId].pad = !!(settings & 0x00000100);
+        state.channels[channelId].lowZ = !!(settings & 0x00010000);
+
+        // Decode input type
+        if (settings & 0x02000000) {
+            state.channels[channelId].input = "di";
+        } else if (settings & 0x01000000) {
+            state.channels[channelId].input = "line";
+        } else {
+            state.channels[channelId].input = "mic";
+        }
+
+        // Update gain values
+        state.channels[channelId].micGain = micGain;
+        state.channels[channelId].lineGain = lineGain;
+        state.channels[channelId].diGain = diGain;
+
+        // Log updated state
+        console.log(`Updated state for channel ${channelId}:`, state.channels[channelId]);
+    } else {
+        console.warn(`Unknown channel ID: ${channelId}`);
+    }
+}
+
 function constructPayload(channelId, phantom, pad, lowZ, input, connection, gain) {
     const header = "380b00001400000063"; // Header and command ID
     const channelHex = channelId.toString(16).padStart(2, '0'); // Channel ID
@@ -46,32 +99,24 @@ function constructPayload(channelId, phantom, pad, lowZ, input, connection, gain
 
     const settingsHex = settings.toString(16).padStart(8, '0'); // Convert to hex
 
-    // Adjust gain encoding based on input type
-    let gainHex;
-    if (input === "di") {
-        // DI mode: encode gain as `0014[GainHex]`
-        const diGain = Math.min(Math.max(gain, 0), 255); // Clamp gain to 0-255
-        const gainValueHex = (0x123c + diGain).toString(16).padStart(4, '0'); // Adjust base gain
-        gainHex = `0014${gainValueHex}`;
-    } else if (input === "mic") {
-        // Mic mode: simpler gain encoding
-        const micGain = Math.min(Math.max(gain, 0), 70); // Clamp gain for mic
-        gainHex = micGain.toString(16).padStart(4, '0');
-    } else {
-        // Default mode (line): Standard gain encoding
-        const lineGain = Math.min(Math.max(gain, 0), 60); // Clamp gain for line
-        gainHex = lineGain.toString(16).padStart(4, '0');
-    }
+    // Clamp and encode gain values
+    // @todo : This isn't working properly, but is close.
+    const micGain = Math.min(Math.max(state.channels[channelId].micGain, 0), 70).toString(16).padStart(2, '0');
+    const lineGain = Math.min(Math.max(state.channels[channelId].lineGain, 0), 60).toString(16).padStart(2, '0');
+    const diGain = Math.min(Math.max(state.channels[channelId].diGain, 0), 255).toString(16).padStart(2, '0');
+
+    // Combine gains into the last 6 characters
+    const gainHex = `${micGain}${lineGain}${diGain}`;
 
     const suffix = "123c"; // Fixed suffix
-    const padding = "000000000000"; // Padding
     return `${header}${channelHex}${operationFlag}${settingsHex}${gainHex}${suffix}`;
 }
+
 
 // Function to send a payload and update state
 function sendPayload(channelId, phantom, pad, lowZ, input, connection, gain) {
     // Update the state object
-    state.channels[channelId] = { phantom, pad, lowZ, input, connection, gain };
+    state.channels[channelId-1] = { phantom, pad, lowZ, input, connection, gain };
 
     // Construct and send the payload
     const payloadHex = constructPayload(channelId, phantom, pad, lowZ, input, connection, gain);
@@ -99,19 +144,11 @@ client.connect(NEVE_PORT, NEVE_IP, () => {
     setInterval(sendKeepAlive, KEEP_ALIVE_INTERVAL);
 });
 
-// Handle incoming data (responses from the device)
+// Handle incoming data
 client.on('data', (data) => {
-    console.log('Received response:');
-    const hexData = data.toString('hex');
-    console.log(hexData);
-
-    // Example: Parse the incoming data and update state (you'll need to refine this)
-    const channelId = parseInt(hexData.substring(8, 10), 16); // Extract channel ID
-    const newGain = parseInt(hexData.substring(16, 20), 16); // Extract new gain value
-    if (state.channels[channelId]) {
-        state.channels[channelId].gain = newGain;
-        console.log(`Updated state for channel ${channelId}:`, state.channels[channelId]);
-    }
+    let parsed =  parseIncomingData(data);
+    // console.log(parsed);
+    // console.log(state);
 });
 
 // Handle connection errors
@@ -124,13 +161,7 @@ client.on('close', () => {
     console.log('Connection closed.');
 });
 
-// setTimeout(() => {
-// sendPayload(0, false, false, false, "mic", "front", 0);
-// sendPayload(1, false, false, false, "mic", "front", 0);
-// sendPayload(2, false, false, false, "mic", "front", 0);
-// sendPayload(3, false, false, false, "mic", "front", 0);
-// sendPayload(4, false, false, false, "mic", "front", 0);
-// sendPayload(5, false, false, false, "mic", "front", 0);
-// sendPayload(6, false, false, false, "mic", "front", 0);
-// sendPayload(7, false, false, false, "mic", "front", 0);
-console.log(state);
+
+// Example Usage
+sendPayload(2, false, false, false, "mic", "front", 0);
+console.log(state)
