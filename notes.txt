@@ -1,6 +1,13 @@
 Trace the payloads sent to the OPX via the Neve software
 tshark -i en9 -f "host 192.168.9.21" -Y "tcp.len > 0" -T fields -e data > payload_log.txt
 
+Example to send a payload (fish shell):
+
+```
+set -x payload 380b000014000000630200000001000000000014123c;
+echo -n $payload | xxd -r -p | nc 192.168.9.21 51001;
+```
+
 Example Gain of Channel 2 from 20 to 70 (max)
 380b00000e0000006702000000010000000000011200
 380b00000e0000006702000000010000000000021200
