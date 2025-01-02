@@ -6,6 +6,7 @@ const NEVE_PORT = 51001;
 const KEEP_ALIVE_INTERVAL = 5000; // Send keep-alive every 5 seconds
 
 // State object to track channel configurations
+// @todo: pull state from OPX on startup.
 const state = {
     channels: Array.from({ length: 8 }, () => ({
         phantom: false,
@@ -99,17 +100,18 @@ function constructPayload(channelId, phantom, pad, lowZ, input, connection, gain
 
     const settingsHex = settings.toString(16).padStart(8, '0'); // Convert to hex
 
-    // Clamp and encode gain values
-    // @todo : This isn't working properly, but is close.
-    const micGain = Math.min(Math.max(state.channels[channelId].micGain, 0), 70).toString(16).padStart(2, '0');
-    const lineGain = Math.min(Math.max(state.channels[channelId].lineGain, 0), 60).toString(16).padStart(2, '0');
-    const diGain = Math.min(Math.max(state.channels[channelId].diGain, 0), 255).toString(16).padStart(2, '0');
+    // Add any missing flags or adjustments
+    // @todo: Resolve this as it's likely related to lpf and phase.
+    const additionalFlags = "00"; // Presume based on observed data (adjust if necessary)
 
-    // Combine gains into the last 6 characters
-    const gainHex = `${micGain}${lineGain}${diGain}`;
+    // Clamp and encode the single gain value
+    const clampedGain = Math.min(Math.max(gain, 0), 255).toString(16).padStart(2, '0');
 
-    const suffix = "123c"; // Fixed suffix
-    return `${header}${channelHex}${operationFlag}${settingsHex}${gainHex}${suffix}`;
+    // Use the clamped gain for micGain, lineGain, and diGain
+    const gainHex = `${clampedGain}${clampedGain}${clampedGain}`;
+
+    const payload = `${header}${channelHex}${operationFlag}${settingsHex}${additionalFlags}${gainHex}`;
+    return payload;
 }
 
 
